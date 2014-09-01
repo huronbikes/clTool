@@ -21,6 +21,9 @@ Section   string
 Query     string
 waitgroup sync.WaitGroup
 currentPage *Page
+workerMutex sync.Mutex
+workerCount int
+bool
 }
 
 type Link struct {
@@ -35,9 +38,31 @@ func (srch *Search) FillPage () *Page {
 	page := new(Page);
 	page.Links = make([]Link, PageSize, PageSize)
 	for i:=0; i < PageSize; i++ {
-		page.Links[i] = <- srch.CLResults
+		if srch.WorkerCount() > 0 {
+			page.Links[i] = <- srch.CLResults
+		}
 	}
 	return page
+}
+
+func (srch *Search) AddWorker() {
+	srch.workerMutex.Lock()
+	defer srch.workerMutex.Unlock()
+	fmt.Println("Starting worker... ", srch.workerCount)
+	srch.workerCount++
+}
+
+func (srch *Search) WorkerCount() int{
+	srch.workerMutex.Lock()
+	defer srch.workerMutex.Unlock()
+	return srch.workerCount
+}
+
+func (srch *Search) WorkerCompleted() {
+	srch.workerMutex.Lock()
+	defer srch.workerMutex.Unlock()
+	fmt.Println("Ending worker... ",srch.workerCount)
+	srch.workerCount--
 }
 
 func (srch *Search) NextPage () {
@@ -179,13 +204,13 @@ func (srch *Search) SearchCL() {
 		if !ok {
 			return
 		}
-		srch.waitgroup.Add(1)
+		srch.AddWorker()
 		go srch.GetResults(clBaseUrl)
 	}
 }
 
 func (srch *Search) GetResults(clBaseUrl string) {
-	defer srch.waitgroup.Done()
+	defer srch.WorkerCompleted()
 	clBaseUrl = strings.TrimSuffix(clBaseUrl, "/")
 	url := fmt.Sprintf("%s/search/%s?query=%s", clBaseUrl, srch.Section, srch.Query)
 	resp, err := http.Get(url);

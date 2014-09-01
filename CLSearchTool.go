@@ -21,7 +21,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			paths = paths[1:]
 		}
 	}
-	fmt.Println(paths)
 	if len(paths) > 0 {
 		switch strings.ToLower(paths[0]) {
 			case "search":
