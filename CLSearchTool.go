@@ -29,8 +29,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 					sect := paths[1]
 					query := paths[2]
 					SRCH.Init(sect, query)
-					go SRCH.SearchCL()
-					fmt.Println(paths)
+					SRCH.SearchCL()
 					http.Redirect(w,r,"/",302)
 				}
 			case "next":

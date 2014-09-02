@@ -19,8 +19,8 @@ CLUrls    chan string
 CLResults chan Link
 Section   string
 Query     string
-waitgroup sync.WaitGroup
 currentPage *Page
+resultMutex sync.Mutex
 workerMutex sync.Mutex
 workerCount int
 bool
@@ -35,8 +35,11 @@ type Link struct {
 }
 
 func (srch *Search) FillPage () *Page {
+	srch.resultMutex.Lock()
+	defer srch.resultMutex.Unlock()
 	page := new(Page);
 	page.Links = make([]Link, PageSize, PageSize)
+	fmt.Println("Filling page ",srch.WorkerCount())
 	for i:=0; i < PageSize; i++ {
 		if srch.WorkerCount() > 0 {
 			page.Links[i] = <- srch.CLResults
@@ -192,10 +195,16 @@ func (srch *Search) _getLinks(doc *html.Node) {
 
 func (srch *Search) getLinks(doc *html.Node) {
 	srch._getLinks(doc)
+	defer srch.WorkerCompleted()
 	close(srch.CLUrls)
 }
 
 func (srch *Search) SearchCL() {
+	srch.AddWorker()
+	go srch._searchCl()
+}
+
+func (srch *Search) _searchCl() {
 	resp, _ := http.Get("http://geo.craigslist.org/iso/us/")
 	doc, _ := html.Parse(resp.Body);
 	go srch.getLinks(doc)
@@ -217,6 +226,7 @@ func (srch *Search) GetResults(clBaseUrl string) {
 	if err != nil {
 		fmt.Print(err)
 		return
+
 	}
 	doc, _ := html.Parse(resp.Body);
 	findfn := func(doc *html.Node) bool {
