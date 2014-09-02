@@ -9,14 +9,8 @@ import (
 	"net/url"
 )
 
-const (
-	NoSearch = iota
-	SearchInitialized = iota
-	SearchInProgress = iota
-	SearchCompleted = iota
-)
 
-const PageSize int = 25
+const DefaultPageSize int = 25
 
 type Page struct {
 	Links []Link
@@ -27,30 +21,16 @@ type Search struct {
 	CLResults   chan Link
 	Section     string
 	Query       string
+	PageSize int
 	currentPage *Page
 	resultMutex sync.Mutex
-	workerMutex sync.Mutex
-	workerCount int
-	searchState int
-	stateMutex  sync.Mutex
+	workers workerPool
+	searchState searchState
 }
 
-type Link struct {
-	Url *url.URL
-	OriginalHref string
-	Section string
-	PostId string
-	PostTitle string
-	Price string
-}
 
 func (srch *Search)transitionSearchState(state int){
-	srch.stateMutex.Lock()
-	defer srch.stateMutex.Unlock()
-	if state < NoSearch || state > SearchCompleted {
-		panic("Invalid transition!")
-	}
-	srch.searchState=state
+	srch.searchState.setSearchState(state)
 	switch state {
 	case SearchCompleted:
 		close(srch.CLResults)
@@ -61,8 +41,8 @@ func (srch *Search) FillPage () *Page {
 	srch.resultMutex.Lock()
 	defer srch.resultMutex.Unlock()
 	page := new(Page);
-	page.Links = make([]Link, 0, PageSize)
-	for i:=0; i < PageSize; i++ {
+	page.Links = make([]Link, 0, srch.PageSize)
+	for i:=0; i < srch.PageSize; i++ {
 		result, ok := <- srch.CLResults
 		if ok {
 			page.Links = append(page.Links, result)
@@ -71,24 +51,6 @@ func (srch *Search) FillPage () *Page {
 		}
 	}
 	return page
-}
-
-func (srch *Search) AddWorker() {
-	srch.workerMutex.Lock()
-	defer srch.workerMutex.Unlock()
-	srch.workerCount++
-}
-
-func (srch *Search) WorkerCount() int{
-	srch.workerMutex.Lock()
-	defer srch.workerMutex.Unlock()
-	return srch.workerCount
-}
-
-func (srch *Search) WorkerCompleted() {
-	srch.workerMutex.Lock()
-	defer srch.workerMutex.Unlock()
-	srch.workerCount--
 }
 
 func (srch *Search) NextPage () {
@@ -101,16 +63,6 @@ func (srch *Search) GetCurrentPage () *Page {
 	}
 	return srch.currentPage
 }
-
-
-func (lnk *Link) GetLinkUrl () string {
-	return lnk.Url.String()
-}
-
-func (lnk *Link) PostString () string {
-	return fmt.Sprintf("%s %s %s", lnk.GetLinkUrl(), lnk.PostTitle, lnk.Price)
-}
-
 
 func (srch *Search) LinkFromElement (node *html.Node, baseUrl *url.URL) *Link {
 	attr := GetAttr(node, "data-pid")
@@ -146,11 +98,17 @@ func (srch *Search) LinkFromElement (node *html.Node, baseUrl *url.URL) *Link {
 	return nil
 }
 
+/*
+	Initialization method for Seach.
+ */
+
 func (srch *Search) Init(Sect string, Query string) {
 	srch.CLUrls = make(chan string, 5)
 	srch.CLResults = make(chan Link, 5)
+	srch.PageSize = DefaultPageSize
 	srch.Section = Sect
 	srch.Query = Query
+	srch.workers.init()
 	srch.transitionSearchState(SearchInitialized)
 }
 
@@ -164,47 +122,9 @@ func Traverse(doc *html.Node, tvsfn func(*html.Node)) {
 	}
 }
 
-/*
-   find the first node such that findfn returns a value
- */
-func Find(doc *html.Node, findfn func(*html.Node) bool) *html.Node {
-	result := findfn(doc)
-	var found *html.Node
-	if result {
-		return doc
-	}
-	if doc.NextSibling != nil && found == nil {
-		found = Find(doc.NextSibling, findfn)
-	}
-	if doc.FirstChild != nil && found == nil {
-		found = Find(doc.FirstChild, findfn)
-	}
-	return found
-}
 
-/*
-  find the first attribute with named by attrKey
- */
-func GetAttr(doc *html.Node, attrKey string) *html.Attribute {
-	attrs := doc.Attr
-	for _, i := range attrs {
-		if i.Key == attrKey {
-			return &i
-		}
-	}
-	return nil
-}
+func Dispose(srch *Search) {
 
-/*
-  Returns true if Node doc has an attribute with key attr.Key and value attr.Val
- */
-
-func HasAttr(doc *html.Node, attrKey string, attrVal string) bool {
-	testAttr := GetAttr(doc, attrKey)
-	if testAttr != nil {
-		return testAttr.Val == attrVal
-	}
-	return false
 }
 
 func (srch *Search) _getLinks(doc *html.Node) {
@@ -229,14 +149,14 @@ func (srch *Search) getLinks(doc *html.Node) {
 }
 
 func (srch *Search) SearchCL() {
-	srch.AddWorker()
+	srch.workers.AddWorker()
 	srch.transitionSearchState(SearchInProgress)
 	go srch._searchCl()
 }
 
 func (srch *Search) _searchCl() {
 	resp, err := http.Get("http://geo.craigslist.org/iso/us/")
-	defer srch.WorkerCompleted()
+	defer srch.workers.WorkerCompleted()
 	if err == nil {
 		doc, _ := html.Parse(resp.Body);
 		go srch.getLinks(doc)
@@ -245,7 +165,7 @@ func (srch *Search) _searchCl() {
 			if !ok {
 				return
 			}
-			srch.AddWorker()
+			srch.workers.AddWorker()
 			go srch.GetResults(clBaseUrl)
 		}
 	} else {
@@ -256,8 +176,8 @@ func (srch *Search) _searchCl() {
 }
 
 func (srch *Search) maybeCompleted(){
-	srch.WorkerCompleted()
-	if srch.WorkerCount() == 0 {
+	srch.workers.WorkerCompleted()
+	if srch.workers.WorkerCount() == 0 {
 		srch.transitionSearchState(SearchCompleted)
 	}
 }
