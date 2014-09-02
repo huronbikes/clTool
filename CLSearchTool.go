@@ -68,7 +68,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		for _, i := range SRCH.GetCurrentPage().Links {
 			fmt.Fprintf(w, "<li style=\"width:100%%;\">")
 			fmt.Fprintf(w,"<span style=\"width:25%%; display: block; float: left;\">")
-			fmt.Fprintf(w, "%s</span><a href=\"%s\">%s (%s)</a></li>", i.BaseUrl, i.GetLinkUrl(), i.PostTitle, i.Price)
+			fmt.Fprintf(w, "%s</span><a href=\"%s\">%s (%s)</a></li>", i.Url.Host, i.GetLinkUrl(), i.PostTitle, i.Price)
 		}
 		fmt.Fprintf(w, "</ul>")
 		fmt.Fprintf(w,"<a href=\"/next/\">Next</a>")

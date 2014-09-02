@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"code.google.com/p/go.net/html"
 	"sync"
+	"net/url"
 )
 
 const (
@@ -35,7 +36,8 @@ type Search struct {
 }
 
 type Link struct {
-	BaseUrl string
+	Url *url.URL
+	OriginalHref string
 	Section string
 	PostId string
 	PostTitle string
@@ -102,20 +104,18 @@ func (srch *Search) GetCurrentPage () *Page {
 
 
 func (lnk *Link) GetLinkUrl () string {
-	clBaseUrl := strings.TrimSuffix(lnk.BaseUrl, "/")
-	url := fmt.Sprintf("%s/%s/%s.html", clBaseUrl, lnk.Section, lnk.PostId)
-	return url
+	return lnk.Url.String()
 }
 
 func (lnk *Link) PostString () string {
 	return fmt.Sprintf("%s %s %s", lnk.GetLinkUrl(), lnk.PostTitle, lnk.Price)
 }
 
-func (srch *Search) LinkFromElement (node *html.Node, baseUrl string) *Link {
+
+func (srch *Search) LinkFromElement (node *html.Node, baseUrl *url.URL) *Link {
 	attr := GetAttr(node, "data-pid")
 	if attr != nil {
 		link:=new(Link)
-		link.BaseUrl=baseUrl
 		link.Section = srch.Section
 		link.PostId=attr.Val
 		findfn:=func(nd *html.Node) bool {
@@ -129,7 +129,15 @@ func (srch *Search) LinkFromElement (node *html.Node, baseUrl string) *Link {
 			title := Find(node.FirstChild, func(nd *html.Node) bool {
 					return nd.Data == "a" && HasAttr(nd, "class", "hdrlnk")
 				})
+
 			if title != nil && title.FirstChild != nil {
+				link.OriginalHref = GetAttr(title, "href").Val
+				hrefUrl,_ := url.Parse(link.OriginalHref)
+				if !hrefUrl.IsAbs() {
+					hrefUrl.Host=baseUrl.Host
+					hrefUrl.Scheme=baseUrl.Scheme
+				}
+				link.Url=hrefUrl
 				link.PostTitle = title.FirstChild.Data
 			}
 		}
@@ -256,9 +264,14 @@ func (srch *Search) maybeCompleted(){
 
 func (srch *Search) GetResults(clBaseUrl string) {
 	defer srch.maybeCompleted()
-	clBaseUrl = strings.TrimSuffix(clBaseUrl, "/")
-	url := fmt.Sprintf("%s/search/%s?query=%s", clBaseUrl, srch.Section, srch.Query)
-	resp, err := http.Get(url);
+	clurl,_ := url.Parse(clBaseUrl)
+	clurl.Path="/search/" + srch.Section
+	query := clurl.Query()
+	query.Set("query",srch.Query)
+	clurl.RawQuery=query.Encode()
+
+
+	resp, err := http.Get(clurl.String());
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -274,7 +287,7 @@ func (srch *Search) GetResults(clBaseUrl string) {
 	if content != nil {
 		link := content.FirstChild
 		for {
-			Link := srch.LinkFromElement(link, clBaseUrl)
+			Link := srch.LinkFromElement(link, clurl)
 			if Link != nil {
 				srch.CLResults <- *Link
 			}
