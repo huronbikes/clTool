@@ -267,7 +267,9 @@ func (srch *Search) GetResults(clBaseUrl string) {
 	findfn := func(doc *html.Node) bool {
 		return doc.Type == html.ElementNode && doc.Data == "div" && HasAttr(doc, "class", "content")
 	}
-
+	if doc == nil {
+		return
+	}
 	content := Find(doc, findfn);
 	if content != nil {
 		link := content.FirstChild
