@@ -123,8 +123,10 @@ func Traverse(doc *html.Node, tvsfn func(*html.Node)) {
 }
 
 
-func Dispose(srch *Search) {
-
+func (srch *Search)Dispose() {
+	srch.workers.stop()
+	for _ = range srch.CLResults {
+	}
 }
 
 func (srch *Search) _getLinks(doc *html.Node) {
@@ -149,14 +151,15 @@ func (srch *Search) getLinks(doc *html.Node) {
 }
 
 func (srch *Search) SearchCL() {
-	srch.workers.AddWorker()
 	srch.transitionSearchState(SearchInProgress)
-	go srch._searchCl()
+	srch.workers.addWorker(func() {
+		srch._searchCl()
+	})
 }
 
 func (srch *Search) _searchCl() {
 	resp, err := http.Get("http://geo.craigslist.org/iso/us/")
-	defer srch.workers.WorkerCompleted()
+	defer srch.workers.workerCompleted()
 	if err == nil {
 		doc, _ := html.Parse(resp.Body);
 		go srch.getLinks(doc)
@@ -165,8 +168,9 @@ func (srch *Search) _searchCl() {
 			if !ok {
 				return
 			}
-			srch.workers.AddWorker()
-			go srch.GetResults(clBaseUrl)
+			srch.workers.addWorker(func() {
+				srch.GetResults(clBaseUrl)
+			})
 		}
 	} else {
 		close(srch.CLResults)
@@ -176,8 +180,8 @@ func (srch *Search) _searchCl() {
 }
 
 func (srch *Search) maybeCompleted(){
-	srch.workers.WorkerCompleted()
-	if srch.workers.WorkerCount() == 0 {
+	srch.workers.workerCompleted()
+	if srch.workers.workerCount() == 0 {
 		srch.transitionSearchState(SearchCompleted)
 	}
 }
@@ -210,6 +214,9 @@ func (srch *Search) GetResults(clBaseUrl string) {
 			Link := srch.LinkFromElement(link, clurl)
 			if Link != nil {
 				srch.CLResults <- *Link
+			}
+			if srch.workers.stopped() {
+				return
 			}
 			link = link.NextSibling
 			if link == nil || (link.Type == html.ElementNode && link.Data == "h4" && HasAttr(link, "class", "ban nearby")) {

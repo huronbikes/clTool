@@ -14,13 +14,13 @@ type searchState struct {
 	stateValue int
 }
 
-func (st searchState) getSearchState() int {
+func (st *searchState) getSearchState() int {
 	st.stateMutex.Lock()
 	defer st.stateMutex.Unlock()
 	return st.stateValue
 }
 
-func (st searchState) setSearchState (state int) {
+func (st *searchState) setSearchState (state int) {
 	st.stateMutex.Lock()
 	defer st.stateMutex.Unlock()
 	if state < NoSearch || state > SearchCompleted {

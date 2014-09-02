@@ -24,6 +24,9 @@ func searchhandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(paths) >= 3 {
+		if SRCH != nil {
+			SRCH.Dispose()
+		}
 		SRCH = new(clSearch.Search)
 		sect := paths[1]
 		query := paths[2]

@@ -8,30 +8,46 @@ const MaxWorkers = 5
 
 type workerPool struct {
 	workerMutex sync.Mutex
-	workerCount int
+	count int
 	workerLimiter chan int
+	closed bool
 }
 
 func (pool *workerPool) init () {
 	pool.workerLimiter = make(chan int, MaxWorkers)
 }
 
-func (pool *workerPool) AddWorker() {
-	pool.workerLimiter <- 1
+func (pool *workerPool) stop() {
 	pool.workerMutex.Lock()
 	defer pool.workerMutex.Unlock()
-	pool.workerCount++
+	pool.closed=true
 }
 
-func (pool *workerPool) WorkerCount() int{
+func (pool *workerPool) stopped () bool {
 	pool.workerMutex.Lock()
 	defer pool.workerMutex.Unlock()
-	return pool.workerCount
+	return pool.closed
 }
 
-func (pool *workerPool) WorkerCompleted() {
+func (pool *workerPool) addWorker(fn func()) {
+	if !pool.closed {
+		pool.workerLimiter <- 1
+		pool.workerMutex.Lock()
+		defer pool.workerMutex.Unlock()
+		pool.count++
+		go fn()
+	}
+}
+
+func (pool *workerPool) workerCount() int{
+	pool.workerMutex.Lock()
+	defer pool.workerMutex.Unlock()
+	return pool.count
+}
+
+func (pool *workerPool) workerCompleted() {
 	<- pool.workerLimiter
 	pool.workerMutex.Lock()
 	defer pool.workerMutex.Unlock()
-	pool.workerCount--
+	pool.count--
 }
