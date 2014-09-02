@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"html"
+	"encoding/json"
 	"github.com/clTool/clSearch"
 	"strings"
 )
@@ -11,7 +12,7 @@ import (
 
 var SRCH *clSearch.Search
 
-func handler(w http.ResponseWriter, r *http.Request) {
+func searchhandler(w http.ResponseWriter, r *http.Request) {
 	paths:=strings.Split(r.URL.Path, "/")
 	if len(paths) > 0 {
 		for {
@@ -21,25 +22,30 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			paths = paths[1:]
 		}
 	}
-	if len(paths) > 0 {
-		switch strings.ToLower(paths[0]) {
-			case "search":
-				if len(paths) >= 3 {
-					SRCH = new(clSearch.Search)
-					sect := paths[1]
-					query := paths[2]
-					SRCH.Init(sect, query)
-					SRCH.SearchCL()
-					http.Redirect(w,r,"/",302)
-				}
-			case "next":
-				if SRCH != nil {
-					SRCH.NextPage()
-				}
-				http.Redirect(w,r,"/",302)
-		}
-	}
 
+	if len(paths) >= 3 {
+		SRCH = new(clSearch.Search)
+		sect := paths[1]
+		query := paths[2]
+		SRCH.Init(sect, query)
+		SRCH.SearchCL()
+		http.Redirect(w,r,"/",302)
+	}
+}
+
+func nexthandler(w http.ResponseWriter, r *http.Request) {
+	if SRCH != nil {
+		SRCH.NextPage()
+	}
+	http.Redirect(w,r,"/",302)
+}
+
+func currentpage(w http.ResponseWriter, r *http.Request) {
+	enc:=json.NewEncoder(w)
+	enc.Encode(SRCH.GetCurrentPage())
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
 	var currentSearch string
 	if SRCH != nil {
 		currentSearch=SRCH.Query
@@ -65,7 +71,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "%s</span><a href=\"%s\">%s (%s)</a></li>", i.BaseUrl, i.GetLinkUrl(), i.PostTitle, i.Price)
 		}
 		fmt.Fprintf(w, "</ul>")
-		fmt.Fprintf(w,"<a href=\"/next\">Next</a>")
+		fmt.Fprintf(w,"<a href=\"/next/\">Next</a>")
 	}
 
 	fmt.Fprintf(w, "</body>")
@@ -74,5 +80,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	http.HandleFunc("/", handler)
+	http.HandleFunc("/next/",  nexthandler)
+	http.HandleFunc("/search/", searchhandler)
+	http.HandleFunc("/current/", currentpage)
 	http.ListenAndServe(":6080", nil)
 }
