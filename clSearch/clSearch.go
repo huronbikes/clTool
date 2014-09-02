@@ -8,6 +8,13 @@ import (
 	"sync"
 )
 
+const (
+	NoSearch = iota
+	SearchInitialized = iota
+	SearchInProgress = iota
+	SearchCompleted = iota
+)
+
 const PageSize int = 25
 
 type Page struct {
@@ -15,15 +22,16 @@ type Page struct {
 }
 
 type Search struct {
-CLUrls    chan string
-CLResults chan Link
-Section   string
-Query     string
-currentPage *Page
-resultMutex sync.Mutex
-workerMutex sync.Mutex
-workerCount int
-bool
+	CLUrls      chan string
+	CLResults   chan Link
+	Section     string
+	Query       string
+	currentPage *Page
+	resultMutex sync.Mutex
+	workerMutex sync.Mutex
+	workerCount int
+	searchState int
+	stateMutex  sync.Mutex
 }
 
 type Link struct {
@@ -34,15 +42,30 @@ type Link struct {
 	Price string
 }
 
+func (srch *Search)transitionSearchState(state int){
+	srch.stateMutex.Lock()
+	defer srch.stateMutex.Unlock()
+	if state < NoSearch || state > SearchCompleted {
+		panic("Invalid transition!")
+	}
+	srch.searchState=state
+	switch state {
+	case SearchCompleted:
+		close(srch.CLResults)
+	}
+}
+
 func (srch *Search) FillPage () *Page {
 	srch.resultMutex.Lock()
 	defer srch.resultMutex.Unlock()
 	page := new(Page);
-	page.Links = make([]Link, PageSize, PageSize)
-	fmt.Println("Filling page ",srch.WorkerCount())
+	page.Links = make([]Link, 0, PageSize)
 	for i:=0; i < PageSize; i++ {
-		if srch.WorkerCount() > 0 {
-			page.Links[i] = <- srch.CLResults
+		result, ok := <- srch.CLResults
+		if ok {
+			page.Links = append(page.Links, result)
+		} else {
+			break
 		}
 	}
 	return page
@@ -51,7 +74,6 @@ func (srch *Search) FillPage () *Page {
 func (srch *Search) AddWorker() {
 	srch.workerMutex.Lock()
 	defer srch.workerMutex.Unlock()
-	fmt.Println("Starting worker... ", srch.workerCount)
 	srch.workerCount++
 }
 
@@ -64,7 +86,6 @@ func (srch *Search) WorkerCount() int{
 func (srch *Search) WorkerCompleted() {
 	srch.workerMutex.Lock()
 	defer srch.workerMutex.Unlock()
-	fmt.Println("Ending worker... ",srch.workerCount)
 	srch.workerCount--
 }
 
@@ -122,6 +143,7 @@ func (srch *Search) Init(Sect string, Query string) {
 	srch.CLResults = make(chan Link, 5)
 	srch.Section = Sect
 	srch.Query = Query
+	srch.transitionSearchState(SearchInitialized)
 }
 
 func Traverse(doc *html.Node, tvsfn func(*html.Node)) {
@@ -195,38 +217,51 @@ func (srch *Search) _getLinks(doc *html.Node) {
 
 func (srch *Search) getLinks(doc *html.Node) {
 	srch._getLinks(doc)
-	defer srch.WorkerCompleted()
 	close(srch.CLUrls)
 }
 
 func (srch *Search) SearchCL() {
 	srch.AddWorker()
+	srch.transitionSearchState(SearchInProgress)
 	go srch._searchCl()
 }
 
 func (srch *Search) _searchCl() {
-	resp, _ := http.Get("http://geo.craigslist.org/iso/us/")
-	doc, _ := html.Parse(resp.Body);
-	go srch.getLinks(doc)
-	for {
-		clBaseUrl, ok := <-srch.CLUrls
-		if !ok {
-			return
+	resp, err := http.Get("http://geo.craigslist.org/iso/us/")
+	defer srch.WorkerCompleted()
+	if err == nil {
+		doc, _ := html.Parse(resp.Body);
+		go srch.getLinks(doc)
+		for {
+			clBaseUrl, ok := <-srch.CLUrls
+			if !ok {
+				return
+			}
+			srch.AddWorker()
+			go srch.GetResults(clBaseUrl)
 		}
-		srch.AddWorker()
-		go srch.GetResults(clBaseUrl)
+	} else {
+		close(srch.CLResults)
+		close(srch.CLUrls)
+		fmt.Println(err)
+	}
+}
+
+func (srch *Search) maybeCompleted(){
+	srch.WorkerCompleted()
+	if srch.WorkerCount() == 0 {
+		srch.transitionSearchState(SearchCompleted)
 	}
 }
 
 func (srch *Search) GetResults(clBaseUrl string) {
-	defer srch.WorkerCompleted()
+	defer srch.maybeCompleted()
 	clBaseUrl = strings.TrimSuffix(clBaseUrl, "/")
 	url := fmt.Sprintf("%s/search/%s?query=%s", clBaseUrl, srch.Section, srch.Query)
 	resp, err := http.Get(url);
 	if err != nil {
 		fmt.Print(err)
 		return
-
 	}
 	doc, _ := html.Parse(resp.Body);
 	findfn := func(doc *html.Node) bool {
