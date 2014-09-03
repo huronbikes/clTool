@@ -4,7 +4,7 @@ import (
 	"sync"
 )
 
-const MaxWorkers = 5
+const MaxWorkers = 10
 
 type workerPool struct {
 	workerMutex sync.Mutex
